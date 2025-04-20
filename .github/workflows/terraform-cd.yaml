@@ -20,39 +20,51 @@ on:
         default: ''
       tfbackend_file:
         description: 'Path to the .tfbackend file (relative to working_directory)'
-        required: true # Make backend explicit
+        required: true
         type: string
       backend_config_overrides:
         description: 'Optional backend config key=value pairs (JSON object string)'
         required: false
         type: string
-        default: '{}' # e.g., '{ "resource_group_name": "override-rg", "key": "override.tfstate" }'
-      environment:
-        description: 'Name of the GitHub Environment to target (for secrets and protection rules)'
-        required: true
-        type: string # e.g., 'dev', 'uat', 'production'
+        default: '{}'
       tf_action:
         description: "Terraform action ('apply' or 'destroy')"
         required: false
         type: string
         default: 'apply'
+      job_prefix:
+        description: 'Prefix for job display names (e.g., dev, prod)'
+        required: true
+        type: string
+      plan_environment_name:
+        description: 'Name of the pre-configured GitHub Environment for the Plan job'
+        required: true
+        type: string
+      apply_environment_name:
+        description: 'Name of the pre-configured GitHub Environment for the Apply job'
+        required: true
+        type: string
 
     secrets:
-      AZURE_CREDENTIALS: # Define this secret in the target GitHub Environment
-        description: 'JSON object with { client-id, tenant-id, subscription-id } for the target environment'
+      AZURE_CLIENT_ID:
+        description: 'Azure Client ID for OIDC'
+        required: true
+      AZURE_TENANT_ID:
+        description: 'Azure Tenant ID for OIDC'
+        required: true
+      AZURE_SUBSCRIPTION_ID:
+        description: 'Azure Subscription ID for OIDC'
         required: true
 
-# Permissions required for OIDC
 permissions:
   id-token: write
   contents: read
-  # actions: read # May be needed for accessing reusable workflows from other private repos
 
 jobs:
   plan:
-    name: 'Terraform Plan (${{ inputs.environment }})'
+    name: '${{ inputs.job_prefix }}_plan (${{ inputs.plan_environment_name }})'
     runs-on: ubuntu-latest
-    environment: ${{ inputs.environment }} # Associate job with GitHub Environment
+    environment: ${{ inputs.plan_environment_name }}
     defaults:
       run:
         working-directory: ${{ inputs.working_directory }}
@@ -72,9 +84,9 @@ jobs:
       - name: Azure Login using OIDC
         uses: azure/login@v1
         with:
-          client-id: ${{ fromJson(secrets.AZURE_CREDENTIALS).client-id }}
-          tenant-id: ${{ fromJson(secrets.AZURE_CREDENTIALS).tenant-id }}
-          subscription-id: ${{ fromJson(secrets.AZURE_CREDENTIALS).subscription-id }}
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
           enable-AzPSSession: false
 
       - name: Terraform Init
@@ -83,26 +95,14 @@ jobs:
           backend_args=""
           if [[ -n "${{ inputs.tfbackend_file }}" ]]; then
             backend_args="-backend-config=\"${{ inputs.tfbackend_file }}\""
-          else
-            echo "::warning::tfbackend_file input not provided. Relying on backend block in code or overrides."
           fi
-
-          # Process JSON overrides object
           backend_overrides='${{ inputs.backend_config_overrides }}'
           if [[ "$backend_overrides" != "{}" ]]; then
-            echo "Applying backend overrides..."
             echo "$backend_overrides" | jq -r 'to_entries[] | "-backend-config=\(.key)=\(.value)"' | while IFS= read -r line; do
               backend_args="$backend_args $line"
             done
           fi
-
-          echo "Running: terraform init -input=false $backend_args"
           terraform init -input=false $backend_args
-        env:
-          ARM_CLIENT_ID: ${{ fromJson(secrets.AZURE_CREDENTIALS).client-id }}
-          ARM_SUBSCRIPTION_ID: ${{ fromJson(secrets.AZURE_CREDENTIALS).subscription-id }}
-          ARM_TENANT_ID: ${{ fromJson(secrets.AZURE_CREDENTIALS).tenant-id }}
-          ARM_USE_OIDC: true
 
       - name: Terraform Plan
         id: plan
@@ -110,43 +110,25 @@ jobs:
           plan_args="-input=false -out=tfplan -detailed-exitcode"
           if [[ "${{ inputs.tf_action }}" == "destroy" ]]; then
             plan_args="$plan_args -destroy"
-            echo "Planning a destroy operation."
           fi
           if [[ -n "${{ inputs.tfvars_file }}" ]]; then
             plan_args="$plan_args -var-file=${{ inputs.tfvars_file }}"
           fi
-
           set +e
           terraform plan $plan_args
           exitcode=$?
           set -e
-
-          echo "Terraform Plan Exit Code: $exitcode"
           echo "exitcode=$exitcode" >> $GITHUB_OUTPUT
-
           if [ $exitcode -eq 1 ]; then
             echo "::error::Terraform Plan Failed!"
             exit 1
-          elif [ $exitcode -eq 0 ]; then
-             echo "Terraform Plan shows no changes."
-          elif [ $exitcode -eq 2 ]; then
-             echo "Terraform Plan shows changes."
-          else
-             echo "::error::Terraform Plan returned unexpected exit code $exitcode"
-             exit 1
           fi
-        env:
-          ARM_CLIENT_ID: ${{ fromJson(secrets.AZURE_CREDENTIALS).client-id }}
-          ARM_SUBSCRIPTION_ID: ${{ fromJson(secrets.AZURE_CREDENTIALS).subscription-id }}
-          ARM_TENANT_ID: ${{ fromJson(secrets.AZURE_CREDENTIALS).tenant-id }}
-          ARM_USE_OIDC: true
 
       - name: Create Plan Output for Summary
         id: plan-output
         if: steps.plan.outputs.exitcode == '0' || steps.plan.outputs.exitcode == '2'
         run: |
           PLAN_OUTPUT=$(terraform show -no-color tfplan)
-          # Escape special characters for markdown and multiline output
           PLAN_OUTPUT="${PLAN_OUTPUT//'%'/'%25'}"
           PLAN_OUTPUT="${PLAN_OUTPUT//$'\n'/'%0A'}"
           PLAN_OUTPUT="${PLAN_OUTPUT//$'\r'/'%0D'}"
@@ -161,7 +143,7 @@ jobs:
         env:
           PLAN_SUMMARY: ${{ steps.plan-output.outputs.plan_text }}
         run: |
-          echo "## Terraform Plan Summary (${{ inputs.environment }})" >> $GITHUB_STEP_SUMMARY
+          echo "## Terraform Plan Summary (${{ inputs.plan_environment_name }})" >> $GITHUB_STEP_SUMMARY
           echo "**Working Directory:** \`${{ inputs.working_directory }}\`" >> $GITHUB_STEP_SUMMARY
           echo "**Action:** \`${{ inputs.tf_action }}\`" >> $GITHUB_STEP_SUMMARY
           echo "**Plan Result:** $(if [ ${{ steps.plan.outputs.exitcode }} -eq 0 ]; then echo 'No Changes'; else echo 'Changes Detected'; fi)" >> $GITHUB_STEP_SUMMARY
@@ -171,19 +153,18 @@ jobs:
           echo "</details>" >> $GITHUB_STEP_SUMMARY
 
       - name: Upload Terraform Plan Artifact
-        if: steps.plan.outputs.exitcode == '2' # Only upload if there are changes to apply/destroy
+        if: steps.plan.outputs.exitcode == '2'
         uses: actions/upload-artifact@v4
         with:
-          name: tfplan-${{ inputs.environment }}
+          name: tfplan-${{ inputs.plan_environment_name }}
           path: ${{ inputs.working_directory }}/tfplan
-          retention-days: 1 # Keep plan only as long as needed
+          retention-days: 1
 
   apply:
-    name: 'Terraform Apply (${{ inputs.environment }})'
+    name: '${{ inputs.job_prefix }}_apply (${{ inputs.apply_environment_name }})'
     runs-on: ubuntu-latest
-    environment: ${{ inputs.environment }} # Associate job with GitHub Environment (for approvals etc)
+    environment: ${{ inputs.apply_environment_name }}
     needs: plan
-    # Only run apply if plan had changes (exit code 2)
     if: needs.plan.outputs.tfplanExitCode == '2'
     defaults:
       run:
@@ -191,7 +172,7 @@ jobs:
 
     steps:
       - name: Checkout Repository
-        uses: actions/checkout@v4 # Checkout fresh copy or rely solely on downloaded plan? Checkout is safer.
+        uses: actions/checkout@v4
 
       - name: Setup Terraform
         uses: hashicorp/setup-terraform@v3
@@ -202,56 +183,38 @@ jobs:
       - name: Azure Login using OIDC
         uses: azure/login@v1
         with:
-          client-id: ${{ fromJson(secrets.AZURE_CREDENTIALS).client-id }}
-          tenant-id: ${{ fromJson(secrets.AZURE_CREDENTIALS).tenant-id }}
-          subscription-id: ${{ fromJson(secrets.AZURE_CREDENTIALS).subscription-id }}
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
           enable-AzPSSession: false
 
       - name: Download Terraform Plan Artifact
         uses: actions/download-artifact@v4
         with:
-          name: tfplan-${{ inputs.environment }}
-          path: ${{ inputs.working_directory }} # Download plan into the working directory
+          name: tfplan-${{ inputs.plan_environment_name }}
+          path: ${{ inputs.working_directory }}
 
-      - name: Terraform Init # Required before apply, even with plan file
+      - name: Terraform Init
         id: init
         run: |
           backend_args=""
           if [[ -n "${{ inputs.tfbackend_file }}" ]]; then
             backend_args="-backend-config=\"${{ inputs.tfbackend_file }}\""
-          else
-            echo "::warning::tfbackend_file input not provided. Relying on backend block in code or overrides."
           fi
-
-          # Process JSON overrides object
           backend_overrides='${{ inputs.backend_config_overrides }}'
           if [[ "$backend_overrides" != "{}" ]]; then
-            echo "Applying backend overrides..."
             echo "$backend_overrides" | jq -r 'to_entries[] | "-backend-config=\(.key)=\(.value)"' | while IFS= read -r line; do
               backend_args="$backend_args $line"
             done
           fi
-
-          echo "Running: terraform init -input=false $backend_args"
           terraform init -input=false $backend_args
-        env:
-          ARM_CLIENT_ID: ${{ fromJson(secrets.AZURE_CREDENTIALS).client-id }}
-          ARM_SUBSCRIPTION_ID: ${{ fromJson(secrets.AZURE_CREDENTIALS).subscription-id }}
-          ARM_TENANT_ID: ${{ fromJson(secrets.AZURE_CREDENTIALS).tenant-id }}
-          ARM_USE_OIDC: true
 
       - name: Terraform Apply / Destroy
         run: |
           apply_args="-auto-approve tfplan"
           if [[ "${{ inputs.tf_action }}" == "destroy" ]]; then
-            # Destroy flag is part of the plan file, no extra flag needed for apply
              echo "Applying Terraform Destroy Plan"
           else
              echo "Applying Terraform Apply Plan"
           fi
           terraform apply $apply_args
-        env:
-          ARM_CLIENT_ID: ${{ fromJson(secrets.AZURE_CREDENTIALS).client-id }}
-          ARM_SUBSCRIPTION_ID: ${{ fromJson(secrets.AZURE_CREDENTIALS).subscription-id }}
-          ARM_TENANT_ID: ${{ fromJson(secrets.AZURE_CREDENTIALS).tenant-id }}
-          ARM_USE_OIDC: true
