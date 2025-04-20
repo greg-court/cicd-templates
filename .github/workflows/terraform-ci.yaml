@@ -53,6 +53,12 @@ jobs:
     name: 'Terraform Validate & Plan (${{ inputs.environment_name }})'
     runs-on: ubuntu-latest
     environment: ${{ inputs.environment_name }}
+    env:
+      ARM_USE_OIDC: true
+      ARM_USE_AZUREAD: true
+      ARM_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+      ARM_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+      ARM_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
     defaults:
       run:
         working-directory: ${{ inputs.working_directory }}
@@ -103,12 +109,6 @@ jobs:
           fi
           echo "Running: terraform init -input=false $backend_args"
           terraform init -input=false $backend_args
-        env:
-          ARM_USE_OIDC: true
-          ARM_USE_AZUREAD: true
-          ARM_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
-          ARM_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
-          ARM_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
 
       - name: Terraform Plan
         id: plan
