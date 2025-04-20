@@ -92,7 +92,8 @@ jobs:
         run: |
           backend_args=""
           if [[ -n "${{ inputs.tfbackend_path }}" ]]; then
-            backend_args="-backend-config=\"${{ inputs.tfbackend_path }}\""
+            # Corrected line: Removed escaped quotes \"
+            backend_args="-backend-config=${{ inputs.tfbackend_path }}"
           fi
           backend_overrides='${{ inputs.backend_config_overrides }}'
           if [[ "$backend_overrides" != "{}" ]]; then
@@ -100,6 +101,7 @@ jobs:
               backend_args="$backend_args $line"
             done
           fi
+          echo "Running: terraform init -input=false $backend_args" # Added echo for debugging
           terraform init -input=false $backend_args
 
       - name: Terraform Plan
