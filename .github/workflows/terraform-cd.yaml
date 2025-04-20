@@ -13,12 +13,12 @@ on:
         required: false
         type: string
         default: 'latest'
-      tfvars_file:
-        description: 'Path to the .tfvars file (relative to working_directory)'
+      tfvars_paths:
+        description: 'JSON array of paths to .tfvars files (relative to working_directory)'
         required: false
         type: string
-        default: ''
-      tfbackend_file:
+        default: '[]'
+      tfbackend_path:
         description: 'Path to the .tfbackend file (relative to working_directory)'
         required: true
         type: string
@@ -93,8 +93,8 @@ jobs:
         id: init
         run: |
           backend_args=""
-          if [[ -n "${{ inputs.tfbackend_file }}" ]]; then
-            backend_args="-backend-config=\"${{ inputs.tfbackend_file }}\""
+          if [[ -n "${{ inputs.tfbackend_path }}" ]]; then
+            backend_args="-backend-config=\"${{ inputs.tfbackend_path }}\""
           fi
           backend_overrides='${{ inputs.backend_config_overrides }}'
           if [[ "$backend_overrides" != "{}" ]]; then
@@ -111,10 +111,16 @@ jobs:
           if [[ "${{ inputs.tf_action }}" == "destroy" ]]; then
             plan_args="$plan_args -destroy"
           fi
-          if [[ -n "${{ inputs.tfvars_file }}" ]]; then
-            plan_args="$plan_args -var-file=${{ inputs.tfvars_file }}"
+          tfvars_paths_json='${{ inputs.tfvars_paths }}'
+          if [[ -n "$tfvars_paths_json" && "$tfvars_paths_json" != "[]" ]]; then
+            echo "$tfvars_paths_json" | jq -r '.[]' | while IFS= read -r tfvar_path; do
+              if [[ -n "$tfvar_path" ]]; then
+                plan_args="$plan_args -var-file=\"$tfvar_path\""
+              fi
+            done
           fi
           set +e
+          echo "Running: terraform plan $plan_args"
           terraform plan $plan_args
           exitcode=$?
           set -e
@@ -198,8 +204,8 @@ jobs:
         id: init
         run: |
           backend_args=""
-          if [[ -n "${{ inputs.tfbackend_file }}" ]]; then
-            backend_args="-backend-config=\"${{ inputs.tfbackend_file }}\""
+          if [[ -n "${{ inputs.tfbackend_path }}" ]]; then
+            backend_args="-backend-config=\"${{ inputs.tfbackend_path }}\""
           fi
           backend_overrides='${{ inputs.backend_config_overrides }}'
           if [[ "$backend_overrides" != "{}" ]]; then
