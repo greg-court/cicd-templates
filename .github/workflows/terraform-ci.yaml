@@ -17,7 +17,7 @@ on:
         description: 'JSON array of paths to .tfvars files (relative to working_directory)'
         required: false
         type: string
-        default: '[]' # e.g., '["../common.tfvars", "env.tfvars"]'
+        default: '[]'
       tfbackend_path:
         description: 'Path to the .tfbackend file (relative to working_directory)'
         required: true
@@ -92,16 +92,16 @@ jobs:
         run: |
           backend_args=""
           if [[ -n "${{ inputs.tfbackend_path }}" ]]; then
-            # Corrected line: Removed escaped quotes \"
             backend_args="-backend-config=${{ inputs.tfbackend_path }}"
           fi
           backend_overrides='${{ inputs.backend_config_overrides }}'
+          # Corrected: Use process substitution to avoid subshell for the loop
           if [[ "$backend_overrides" != "{}" ]]; then
-            echo "$backend_overrides" | jq -r 'to_entries[] | "-backend-config=\(.key)=\(.value)"' | while IFS= read -r line; do
+            while IFS= read -r line; do
               backend_args="$backend_args $line"
-            done
+            done < <(echo "$backend_overrides" | jq -r 'to_entries[] | "-backend-config=\(.key)=\(.value)"')
           fi
-          echo "Running: terraform init -input=false $backend_args" # Added echo for debugging
+          echo "Running: terraform init -input=false $backend_args"
           terraform init -input=false $backend_args
 
       - name: Terraform Plan
@@ -110,11 +110,12 @@ jobs:
           plan_args="-input=false -out=tfplan -detailed-exitcode"
           tfvars_paths_json='${{ inputs.tfvars_paths }}'
           if [[ -n "$tfvars_paths_json" && "$tfvars_paths_json" != "[]" ]]; then
-            echo "$tfvars_paths_json" | jq -r '.[]' | while IFS= read -r tfvar_path; do
+            while IFS= read -r tfvar_path; do
               if [[ -n "$tfvar_path" ]]; then
                 plan_args="$plan_args -var-file=\"$tfvar_path\""
               fi
-            done
+            # Corrected: Use process substitution here too for consistency (though less critical as plan_args isn't modified outside loop scope here)
+            done < <(echo "$tfvars_paths_json" | jq -r '.[]')
           fi
           set +e
           echo "Running: terraform plan $plan_args"
