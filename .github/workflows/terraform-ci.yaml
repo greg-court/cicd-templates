@@ -118,9 +118,8 @@ jobs:
           if [[ -n "$tfvars_paths_json" && "$tfvars_paths_json" != "[]" ]]; then
             while IFS= read -r tfvar_path; do
               if [[ -n "$tfvar_path" ]]; then
-                plan_args="$plan_args -var-file=\"$tfvar_path\""
+                plan_args="$plan_args -var-file=$tfvar_path"
               fi
-            # Corrected: Use process substitution here too for consistency (though less critical as plan_args isn't modified outside loop scope here)
             done < <(echo "$tfvars_paths_json" | jq -r '.[]')
           fi
           set +e
