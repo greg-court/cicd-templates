@@ -1,6 +1,6 @@
 Replicating the Block: To replicate the "block merge on failure" behavior, you need to configure Branch Protection Rules in GitHub:
 
-- Go to your repository (gh-greg-court/azure-sandbox).
+- Go to your repository (azure).
 - Navigate to Settings > Branches.
 - Find your main branch (or click Add branch protection rule if none exists for main).
 - Enable "Require status checks to pass before merging".

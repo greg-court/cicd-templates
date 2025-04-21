@@ -18,15 +18,10 @@ on:
         required: false
         type: string
         default: '[]'
-      tfbackend_path:
-        description: 'Path to the .tfbackend file (relative to working_directory)'
+      terraform_backend_key:
+        description: 'The name/path of the terraform state file within the backend container'
         required: true
         type: string
-      backend_config_overrides:
-        description: 'Optional backend config key=value pairs (JSON object string)'
-        required: false
-        type: string
-        default: '{}'
       tf_action:
         description: "Terraform action ('apply' or 'destroy')"
         required: false
@@ -53,7 +48,19 @@ on:
         description: 'Azure Tenant ID for OIDC'
         required: true
       AZURE_SUBSCRIPTION_ID:
-        description: 'Azure Subscription ID for OIDC'
+        description: 'Azure Subscription ID for OIDC identity'
+        required: true
+      BACKEND_SUBSCRIPTION_ID:
+        description: 'Subscription ID where the Terraform state storage account resides'
+        required: true
+      BACKEND_RESOURCE_GROUP_NAME:
+        description: 'Resource Group name of the Terraform state storage account'
+        required: true
+      BACKEND_STORAGE_ACCOUNT_NAME:
+        description: 'Storage Account name for Terraform state'
+        required: true
+      BACKEND_STORAGE_CONTAINER_NAME:
+        description: 'Storage Container name for Terraform state'
         required: true
 
 permissions:
@@ -71,6 +78,7 @@ jobs:
       ARM_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
       ARM_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
       ARM_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+      TF_IN_AUTOMATION: true
     defaults:
       run:
         working-directory: ${{ inputs.working_directory }}
@@ -99,18 +107,20 @@ jobs:
         id: init
         run: |
           backend_args=""
-          if [[ -n "${{ inputs.tfbackend_path }}" ]]; then
-            backend_args="-backend-config=${{ inputs.tfbackend_path }}"
-          fi
-          backend_overrides='${{ inputs.backend_config_overrides }}'
-          # Corrected: Use process substitution to avoid subshell for the loop
-          if [[ "$backend_overrides" != "{}" ]]; then
-            while IFS= read -r line; do
-              backend_args="$backend_args $line"
-            done < <(echo "$backend_overrides" | jq -r 'to_entries[] | "-backend-config=\(.key)=\(.value)"')
-          fi
+          backend_args="$backend_args -backend-config=subscription_id=${{ secrets.BACKEND_SUBSCRIPTION_ID }}"
+          backend_args="$backend_args -backend-config=resource_group_name=${{ secrets.BACKEND_RESOURCE_GROUP_NAME }}"
+          backend_args="$backend_args -backend-config=storage_account_name=${{ secrets.BACKEND_STORAGE_ACCOUNT_NAME }}"
+          backend_args="$backend_args -backend-config=container_name=${{ secrets.BACKEND_STORAGE_CONTAINER_NAME }}"
+          backend_args="$backend_args -backend-config=key=${{ inputs.terraform_backend_key }}"
+          backend_args="$backend_args -backend-config=use_oidc=true"
+
           echo "Running: terraform init -input=false $backend_args"
           terraform init -input=false $backend_args
+        env:
+          ARM_USE_OIDC: true
+          ARM_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+          ARM_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+          ARM_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
 
       - name: Terraform Plan
         id: plan
@@ -121,7 +131,7 @@ jobs:
           fi
           tfvars_paths_json='${{ inputs.tfvars_paths }}'
           if [[ -n "$tfvars_paths_json" && "$tfvars_paths_json" != "[]" ]]; then
-             while IFS= read -r tfvar_path; do
+              while IFS= read -r tfvar_path; do
               if [[ -n "$tfvar_path" ]]; then
                 plan_args="$plan_args -var-file=$tfvar_path"
               fi
@@ -184,6 +194,7 @@ jobs:
       ARM_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
       ARM_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
       ARM_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+      TF_IN_AUTOMATION: true
     needs: plan
     if: needs.plan.outputs.tfplanExitCode == '2'
     defaults:
@@ -218,21 +229,17 @@ jobs:
         id: init
         run: |
           backend_args=""
-          if [[ -n "${{ inputs.tfbackend_path }}" ]]; then
-            backend_args="-backend-config=${{ inputs.tfbackend_path }}"
-          fi
-          backend_overrides='${{ inputs.backend_config_overrides }}'
-           # Corrected: Use process substitution to avoid subshell for the loop
-          if [[ "$backend_overrides" != "{}" ]]; then
-            while IFS= read -r line; do
-              backend_args="$backend_args $line"
-            done < <(echo "$backend_overrides" | jq -r 'to_entries[] | "-backend-config=\(.key)=\(.value)"')
-          fi
+          backend_args="$backend_args -backend-config=subscription_id=${{ secrets.BACKEND_SUBSCRIPTION_ID }}"
+          backend_args="$backend_args -backend-config=resource_group_name=${{ secrets.BACKEND_RESOURCE_GROUP_NAME }}"
+          backend_args="$backend_args -backend-config=storage_account_name=${{ secrets.BACKEND_STORAGE_ACCOUNT_NAME }}"
+          backend_args="$backend_args -backend-config=container_name=${{ secrets.BACKEND_STORAGE_CONTAINER_NAME }}"
+          backend_args="$backend_args -backend-config=key=${{ inputs.terraform_backend_key }}"
+          backend_args="$backend_args -backend-config=use_oidc=true"
+
           echo "Running: terraform init -input=false $backend_args"
           terraform init -input=false $backend_args
         env:
           ARM_USE_OIDC: true
-          ARM_USE_AZUREAD: true
           ARM_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
           ARM_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
           ARM_SUBSCRIPTION_ID: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
